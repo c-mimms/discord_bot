@@ -1,26 +1,39 @@
 # Discord Bot Brain
 
-The centralized "brain" of the Gemini Bot.
+The centralized "brain" of the Gemini Bot ecosystem.
 
-## Project Structure
+## Architecture: The "Home Directory"
+The `discord_bot` project is designed to be run from a shared "Home Directory" (e.g., `~/code/gemini`). This root directory acts as the operational base for the bot and its companion projects (like the Dashboard).
 
-- `src/`: Core Python logic
-  - `app/`: Main application entry points (`bot.py`, `runner.py`, `mcp.py`)
-  - `utils/`: Shared utilities (`message_log.py`)
-- `bin/`: Operational bash scripts (`run.sh`, `watchdog.sh`, `send_message.sh`)
-- `scripts/`: CLI tools for out-of-band communication (`send_message.py`)
-- `skills/`: Source for bot skills (e.g., `discord-helper`)
-- `bot.log`: Main bot execution log
-- `gemini_responses.log`: Log of Gemini's thought processes and actions
-- `bot.pid`: PID of the currently running bot process
+The bot expects the following files to exist in the **Home Directory** (the parent folder):
+- `.env` - Environment variables (`DISCORD_BOT_TOKEN`, `DISCORD_USER_ID`)
+- `.gemini_pids` - Process tracking list
+- `registry.json` - Deployed project registry
+
+The bot will generate its own outputs inside the `discord_bot/` directory:
+- `bot.log` - Application stdout/stderr
+- `gemini_responses.log` - The agentic thought stream
+- `bot.pid` - The current active process lockfile
 
 ## Running the Bot
 
-Use the watchdog to ensure the bot stays alive:
+Always start commands from the **Home Directory**:
 ```bash
-bash bin/watchdog.sh
+cd ~/code/gemini
+```
+
+### Development Mode (Foreground)
+For active development. Outputs directly to the terminal and `bot.log` simultaneously. Press `Ctrl+C` to stop.
+```bash
+./discord_bot/bin/dev.sh
+```
+
+### Production Mode (Background Watchdog)
+For persistent execution. Starts the bot in the background and auto-restarts it if it crashes.
+```bash
+nohup ./discord_bot/bin/watchdog.sh > discord_bot/watchdog.log 2>&1 &
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] $! - watchdog.sh - Starting Discord Bot Watchdog to keep the bot alive" >> .gemini_pids
 ```
 
 ## Management
-
-The bot can be monitored via the Dashboard project in the root.
+The bot can be monitored via the Dashboard project natively hosted at `http://localhost:8000`.
