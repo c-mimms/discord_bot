@@ -16,4 +16,7 @@ fi
 # export DISCORD_BOT_TOKEN="your_bot_token"
 # export DISCORD_USER_ID="your_user_id"
 
-python3 "$SCRIPT_DIR/bot.py" > "$SCRIPT_DIR/bot.log" 2>&1
+# Make sure we are in the discord_bot directory
+cd "$SCRIPT_DIR/.."
+
+python3 -m src.app.bot > "$SCRIPT_DIR/../bot.log" 2>&1

@@ -3,15 +3,19 @@ import os
 import time
 
 import discord
+from dotenv import load_dotenv
+
+load_dotenv()
 
 if __package__ is None or __package__ == "":
-    # Allow running as a script: `python3 discord_bot/bot.py`
+    # Allow running as a script from the discord_bot directory
     import sys
+    parent_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
 
-    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
-from discord_bot.gemini_runner import run_next_turn
-from discord_bot.message_log import append_message, get_undelivered_bot_messages, load_messages, mark_delivered
+from src.app.runner import run_next_turn
+from src.utils.message_log import append_message, get_undelivered_bot_messages, load_messages, mark_delivered
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 

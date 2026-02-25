@@ -3,14 +3,19 @@ import os
 import time
 
 import discord
+from dotenv import load_dotenv
+
+load_dotenv()
 
 if __package__ is None or __package__ == "":
-    # Allow running as a script: `python3 discord_bot/send_message.py "..."` from project root.
+    # Allow running as a script from the project root or discord_bot directory
     import sys
+    # scripts/send_message.py -> one level up to discord_bot
+    parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
 
-    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
-from discord_bot.message_log import append_message, mark_delivered
+from src.utils.message_log import append_message, mark_delivered
 
 # Placeholder for the bot token
 BOT_TOKEN = os.environ.get('DISCORD_BOT_TOKEN')

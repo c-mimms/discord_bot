@@ -2,6 +2,9 @@ import json
 import os
 import sys
 import time
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Simple MCP server implementing the stdio transport for the Gemini CLI.
 # This server allows Gemini to check for new messages during long-running tasks.

@@ -6,7 +6,7 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BOT_PID_FILE="$SCRIPT_DIR/bot.pid"
+BOT_PID_FILE="$SCRIPT_DIR/../bot.pid"
 BOT_RUN_SCRIPT="$SCRIPT_DIR/run.sh"
 
 echo "[$(date)] Starting watchdog for Discord bot..."
