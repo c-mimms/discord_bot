@@ -1,0 +1,10 @@
+# Environment variables
+.env
+*.log
+*.pid
+__pycache__/
+*.pyc
+messages.json
+last_message_timestamp.txt
+.DS_Store
+.good_commit
