@@ -20,6 +20,7 @@ def set_last_processed_timestamp(file_path, ts: float) -> None:
         f.write(str(float(ts)))
 
 async def outbox_watcher(client, user_ids):
+    print("Outbox watcher started.")
     await client.wait_until_ready()
     while not client.is_closed():
         try:
@@ -59,6 +60,7 @@ async def outbox_watcher(client, user_ids):
             await asyncio.sleep(2.0)
 
 async def gemini_worker(client, queue, user_ids, timestamp_file, gemini_cmd, project_root):
+    print("Gemini worker started.")
     await client.wait_until_ready()
     try:
         last_ts = get_last_processed_timestamp(timestamp_file)
@@ -129,9 +131,8 @@ async def gemini_worker(client, queue, user_ids, timestamp_file, gemini_cmd, pro
                     after = parts[1]
                     if before or active_msg:
                         display_before = before or "..."
-                        if last_status: display_before = f"_{last_status}_
-
-{display_before}"
+                        if last_status: 
+                            display_before = f"_{last_status}_\n\n{display_before}"
                         if active_msg: await active_msg.edit(content=display_before[:1980])
                         else: active_msg = await reply_target.send(display_before[:1980])
                     active_msg = None
@@ -141,15 +142,13 @@ async def gemini_worker(client, queue, user_ids, timestamp_file, gemini_cmd, pro
 
                 # Auto Split
                 if len(reply_accumulator) > 1900:
-                    split_at = reply_accumulator.rfind("
-", 1500, 1900)
+                    split_at = reply_accumulator.rfind("\n", 1500, 1900)
                     if split_at == -1: split_at = 1900
                     before = reply_accumulator[:split_at].strip()
                     after = reply_accumulator[split_at:]
                     display_before = before
-                    if last_status: display_before = f"_{last_status}_
-
-{display_before}"
+                    if last_status: 
+                        display_before = f"_{last_status}_\n\n{display_before}"
                     if active_msg: await active_msg.edit(content=display_before[:1980])
                     else: active_msg = await reply_target.send(display_before[:1980])
                     active_msg = None
@@ -160,9 +159,8 @@ async def gemini_worker(client, queue, user_ids, timestamp_file, gemini_cmd, pro
                 if not force and active_msg and (now - last_edit_time < edit_interval): return
 
                 display_text = reply_accumulator.strip() or "..."
-                if last_status: display_text = f"_{last_status}_
-
-{display_text}"
+                if last_status: 
+                    display_text = f"_{last_status}_\n\n{display_text}"
                 
                 if active_msg is None:
                     active_msg = await reply_target.send(display_text[:1980])

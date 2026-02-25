@@ -19,4 +19,4 @@ fi
 # Make sure we are in the discord_bot directory
 cd "$SCRIPT_DIR/.."
 
-python3 -m src.app.bot > "$SCRIPT_DIR/../bot.log" 2>&1
+python3 -u -m src.app.bot > "$SCRIPT_DIR/../bot.log" 2>&1

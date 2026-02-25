@@ -41,21 +41,11 @@ while true; do
     # Wait to see if it crashes immediately
     sleep 10
     
-    # Health check & rollback
+    # Health check
     if ! ps -p "$NEW_PID" > /dev/null 2>&1; then
-      echo "[$(date)] Bot failed to stay alive! Rolling back uncommitted changes..."
-      (cd "$SCRIPT_DIR" && git reset --hard HEAD && git clean -fd)
-      
-      if [ -f "$SCRIPT_DIR/.good_commit" ]; then
-         GOOD_REV=$(cat "$SCRIPT_DIR/.good_commit")
-         CUR_REV=$(cd "$SCRIPT_DIR" && git rev-parse HEAD)
-         if [ -n "$GOOD_REV" ] && [ "$GOOD_REV" != "$CUR_REV" ]; then
-            echo "[$(date)] Commit $CUR_REV is broken. Rolling back to known good commit $GOOD_REV"
-            (cd "$SCRIPT_DIR" && git reset --hard "$GOOD_REV")
-         fi
-      fi
+      echo "[$(date)] Bot failed to stay alive! Please check logs."
       # Sleep a bit to prevent a tight crash loop
-      sleep 5
+      sleep 10
     fi
   else
     # If the bot is already running healthily, mark the current commit as good

@@ -13,11 +13,12 @@ class GeminiClient(discord.Client):
         self.tasks_started = False
 
     async def setup_hook(self):
-        # Sync slash commands globally
-        await self.tree.sync()
+        print(f"Bot logged in as {self.user} (ID: {self.user.id})")
+        print(f"Application ID: {self.application_id}")
+        # Manual sync trigger will be used instead of auto-sync on startup
 
     def load_registry(self):
-        registry_path = os.path.join(self.project_root, "registry.json")
+        registry_path = os.path.join(self.project_root, "..", "registry.json")
         if os.path.exists(registry_path):
             try:
                 with open(registry_path, "r") as f:
