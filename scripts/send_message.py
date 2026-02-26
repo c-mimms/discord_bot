@@ -15,7 +15,7 @@ if __package__ is None or __package__ == "":
     if parent_dir not in sys.path:
         sys.path.insert(0, parent_dir)
 
-from src.utils.message_log import append_message, mark_delivered
+from src.db.queries import insert_message as append_message, mark_delivered
 
 # Placeholder for the bot token
 BOT_TOKEN = os.environ.get('DISCORD_BOT_TOKEN')

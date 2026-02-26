@@ -1,7 +1,111 @@
 import discord
+import os
+import asyncio
 from discord import app_commands
 
 def setup_commands(client):
+    project_group = app_commands.Group(name="project", description="Manage project lifecycle")
+
+    @project_group.command(name="up", description="Bring a project online")
+    async def project_up(interaction: discord.Interaction, name: str):
+        await interaction.response.defer(ephemeral=False)
+        registry = client.load_registry()
+        projects = registry.get("projects", {})
+        
+        project_key = None
+        for key, data in projects.items():
+            if key == name or data.get("name", "").lower() == name.lower():
+                project_key = key
+                break
+        
+        if not project_key:
+            await interaction.followup.send(f"❌ Project '{name}' not found.")
+            return
+
+        project = projects[project_key]
+        project_path = project.get("path")
+        full_path = os.path.join(client.project_root, "..", project_path)
+        up_script = os.path.join(full_path, "bin", "up.sh")
+
+        if not os.path.exists(up_script):
+            await interaction.followup.send(f"❌ '{project_key}' does not support standardized `bin/up.sh` script.")
+            return
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "bash", up_script,
+                cwd=full_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            stdout_text = stdout.decode()
+            
+            if process.returncode == 0:
+                project["status"] = "active"
+                
+                # Try to find game_url in stdout
+                import re
+                url_match = re.search(r"game_url\s*=\s*\"([^\"]+)\"", stdout_text)
+                if url_match:
+                    project["url"] = url_match.group(1)
+                    await interaction.followup.send(f"✅ Project '{project_key}' is now active at {project['url']}")
+                else:
+                    await interaction.followup.send(f"✅ Project '{project_key}' is now active.")
+                
+                client.save_registry(registry)
+            else:
+                error_msg = stderr.decode().strip() or stdout_text.strip()
+                await interaction.followup.send(f"❌ Failed to bring '{project_key}' up. (Code {process.returncode})\n```{error_msg[:1500]}```")
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error executing up script for '{project_key}': {e}")
+
+    @project_group.command(name="down", description="Put a project in low-cost standby")
+    async def project_down(interaction: discord.Interaction, name: str):
+        await interaction.response.defer(ephemeral=False)
+        registry = client.load_registry()
+        projects = registry.get("projects", {})
+        
+        project_key = None
+        for key, data in projects.items():
+            if key == name or data.get("name", "").lower() == name.lower():
+                project_key = key
+                break
+        
+        if not project_key:
+            await interaction.followup.send(f"❌ Project '{name}' not found.")
+            return
+
+        project = projects[project_key]
+        project_path = project.get("path")
+        full_path = os.path.join(client.project_root, "..", project_path)
+        down_script = os.path.join(full_path, "bin", "down.sh")
+
+        if not os.path.exists(down_script):
+            await interaction.followup.send(f"❌ '{project_key}' does not support standardized `bin/down.sh` script.")
+            return
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "bash", down_script,
+                cwd=full_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                project["status"] = "inactive"
+                client.save_registry(registry)
+                await interaction.followup.send(f"✅ Project '{project_key}' is now in standby.")
+            else:
+                error_msg = stderr.decode().strip() or stdout.decode().strip()
+                await interaction.followup.send(f"❌ Failed to put '{project_key}' in standby. (Code {process.returncode})\n```{error_msg[:1500]}```")
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error executing down script for '{project_key}': {e}")
+
+    client.tree.add_command(project_group)
+
     @client.tree.command(name="projects", description="List all projects and their status")
     async def projects_command(interaction: discord.Interaction):
         registry = client.load_registry()

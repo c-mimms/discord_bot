@@ -37,3 +37,11 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] $! - watchdog.sh - Starting Discord Bot Wat
 
 ## Management
 The bot can be monitored via the Dashboard project natively hosted at `http://localhost:8000`.
+
+## Standardized Project Lifecycle
+To support the `/project up <name>` and `/project down <name>` commands, every project in the ecosystem must follow this structure:
+
+- **`bin/up.sh`**: Script to bring the project online (e.g., start a server, deploy to S3).
+- **`bin/down.sh`**: Script to put the project in a low-cost standby mode (e.g., stop a server, delete S3 bucket while keeping terraform state).
+
+These scripts should be idempotent and return a zero exit code on success. The bot will automatically update the project status in `registry.json` based on the successful execution of these scripts.

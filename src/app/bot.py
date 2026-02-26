@@ -7,8 +7,10 @@ import sys
 from dotenv import load_dotenv
 
 # Path setup for modular imports
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# src/app/bot.py -> src/app -> src -> discord_bot -> gemini (PROJECT_ROOT)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))          # .../discord_bot/src/app/
+DISCORD_BOT_DIR = os.path.dirname(os.path.dirname(BASE_DIR))   # .../discord_bot/
+PROJECT_ROOT = os.path.dirname(DISCORD_BOT_DIR)                # .../gemini/ (repo root)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
@@ -28,8 +30,8 @@ if not BOT_TOKEN or not USER_IDS:
     print("Please set the DISCORD_BOT_TOKEN and DISCORD_USER_ID environment variables.")
     sys.exit(1)
 
-# Single Instance Lock
-PID_FILE = os.path.join(PROJECT_ROOT, "bot.pid")
+# Single Instance Lock — file lives in discord_bot/
+PID_FILE = os.path.join(DISCORD_BOT_DIR, "bot.pid")
 if os.path.exists(PID_FILE):
     try:
         with open(PID_FILE, "r") as f:
@@ -41,11 +43,11 @@ if os.path.exists(PID_FILE):
     except Exception:
         pass # Ignore malformed PID files and overwrite
 
-# Write PID for monitoring at the root of discord_bot
 with open(PID_FILE, "w") as f:
     f.write(str(os.getpid()))
 
-LAST_MESSAGE_TIMESTAMP_FILE = os.path.join(BASE_DIR, "last_message_timestamp.txt")
+# All runtime state files live in discord_bot/
+LAST_MESSAGE_TIMESTAMP_FILE = os.path.join(DISCORD_BOT_DIR, "last_message_timestamp.txt")
 
 # Initialization
 intents = discord.Intents.default()

@@ -8,3 +8,6 @@ messages.json
 last_message_timestamp.txt
 .DS_Store
 .good_commit
+*.db
+*.db-shm
+*.db-wal

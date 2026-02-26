@@ -14,4 +14,4 @@ fi
 
 echo "Starting Discord Bot in Development Mode..."
 cd "$ROOT_DIR"
-python3 -u -m src.app.bot 2>&1 | tee "$ROOT_DIR/discord_bot/bot.log"
+python3 -u -m src.app.bot 2>&1 | tee "$ROOT_DIR/bot.log"
