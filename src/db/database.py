@@ -57,9 +57,25 @@ def init_db():
                 thread_id           INTEGER,           -- origin thread
                 delivered           BOOLEAN DEFAULT 0,
                 delivered_at        REAL,
+                delivery_status     TEXT DEFAULT 'pending', -- 'pending' | 'sent' | 'failed'
+                delivery_error      TEXT,
                 raw_discord_payload TEXT               -- full Discord Message JSON
             )
         ''')
+
+        # Best-effort schema sync for local/dev DBs created before these columns existed.
+        msg_cols = {row["name"] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+        if "delivery_status" not in msg_cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN delivery_status TEXT DEFAULT 'pending'")
+        if "delivery_error" not in msg_cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN delivery_error TEXT")
+        conn.execute(
+            """
+            UPDATE messages
+            SET delivery_status = CASE WHEN delivered = 1 THEN 'sent' ELSE 'pending' END
+            WHERE delivery_status IS NULL OR trim(delivery_status) = ''
+            """
+        )
 
         # ── context_messages ─────────────────────────────────────────────────
         # Many-to-many: any message can belong to any context.
@@ -75,6 +91,7 @@ def init_db():
         # ── indices ───────────────────────────────────────────────────────────
         conn.execute('CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_messages_undelivered ON messages(source, delivered) WHERE source = "bot" AND delivered = 0')
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_delivery_status ON messages(source, delivery_status) WHERE source = 'bot'")
         conn.execute('CREATE INDEX IF NOT EXISTS idx_contexts_status ON contexts(status)')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_contexts_reply_thread ON contexts(reply_thread_id)')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_ctx_msg_context ON context_messages(context_id)')

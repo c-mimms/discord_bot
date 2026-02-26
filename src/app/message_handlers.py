@@ -5,6 +5,7 @@ from src.db.queries import (
     insert_message,
     create_context,
     find_context_by_reply_thread,
+    find_active_context_by_channel,
     add_message_to_context,
 )
 
@@ -124,10 +125,14 @@ async def handle_message(client, message, user_ids):
 
         # 5. Route to a context
         #    If the message came from a thread, find the context that owns it.
-        #    Otherwise, create a fresh context for this new conversation.
+        #    Otherwise, check if there's an active context for this channel (e.g. DM).
+        #    If none found, create a fresh context.
         context_id = None
         if thread_id:
             context_id = find_context_by_reply_thread(thread_id)
+        else:
+            # Look for an active context in this channel (DMs/standard channels)
+            context_id = find_active_context_by_channel(channel_id)
 
         if not context_id:
             context_id = create_context(reply_channel_id=channel_id, reply_thread_id=thread_id)

@@ -28,6 +28,7 @@ def insert_message(
     timestamp_val = float(timestamp if timestamp is not None else time.time())
     msg_id = str(uuid.uuid4())
     delivered_val = 1 if delivered else 0
+    delivery_status = "sent" if delivered_val else "pending"
     payload_json = json.dumps(raw_discord_payload) if raw_discord_payload else None
 
     with get_db() as conn:
@@ -35,11 +36,11 @@ def insert_message(
             """
             INSERT INTO messages
                 (id, author, content, source, timestamp,
-                 channel_id, thread_id, delivered, delivered_at, raw_discord_payload)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 channel_id, thread_id, delivered, delivered_at, delivery_status, delivery_error, raw_discord_payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (msg_id, str(author), str(content), source, timestamp_val,
-             channel_id, thread_id, delivered_val, delivered_at, payload_json),
+             channel_id, thread_id, delivered_val, delivered_at, delivery_status, None, payload_json),
         )
 
     return {
@@ -63,7 +64,7 @@ def get_undelivered_bot_messages() -> List[Dict[str, Any]]:
             """
             SELECT *
             FROM messages
-            WHERE source = 'bot' AND delivered = 0 AND trim(content) != ''
+            WHERE source = 'bot' AND delivery_status = 'pending' AND trim(content) != ''
             ORDER BY timestamp ASC
             """
         )
@@ -78,8 +79,25 @@ def mark_delivered(
     time_val = float(delivered_at if delivered_at is not None else time.time())
     with get_db() as conn:
         cursor = conn.execute(
-            "UPDATE messages SET delivered = ?, delivered_at = ? WHERE id = ?",
-            (1 if delivered else 0, time_val, message_id),
+            """
+            UPDATE messages
+            SET delivered = ?, delivered_at = ?, delivery_status = ?, delivery_error = NULL
+            WHERE id = ?
+            """,
+            (1 if delivered else 0, time_val, "sent" if delivered else "pending", message_id),
+        )
+        return cursor.rowcount > 0
+
+
+def mark_failed_delivery(message_id: str, error: Optional[str] = None) -> bool:
+    with get_db() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE messages
+            SET delivered = 0, delivery_status = 'failed', delivery_error = ?
+            WHERE id = ?
+            """,
+            ((error or "")[:1000], message_id),
         )
         return cursor.rowcount > 0
 
@@ -112,6 +130,24 @@ def find_context_by_reply_thread(thread_id: int) -> Optional[str]:
         cursor = conn.execute(
             "SELECT id FROM contexts WHERE reply_thread_id = ? ORDER BY updated_at DESC LIMIT 1",
             (thread_id,),
+        )
+        row = cursor.fetchone()
+        return row["id"] if row else None
+
+
+def find_active_context_by_channel(channel_id: int) -> Optional[str]:
+    """
+    Find the most recent context for a channel that hasn't been upgraded to a thread.
+    Useful for DMs or initial channel messages before a thread is spawned.
+    """
+    with get_db() as conn:
+        cursor = conn.execute(
+            """
+            SELECT id FROM contexts 
+            WHERE reply_channel_id = ? AND reply_thread_id IS NULL 
+            ORDER BY updated_at DESC LIMIT 1
+            """,
+            (channel_id,),
         )
         row = cursor.fetchone()
         return row["id"] if row else None
@@ -194,16 +230,20 @@ def get_messages_for_context(
     context_id: str,
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
-    """Return all messages linked to this context, ordered by timestamp."""
+    """Return the most recent N messages for this context, oldest->newest."""
     with get_db() as conn:
         cursor = conn.execute(
             """
-            SELECT m.*
-            FROM messages m
-            JOIN context_messages cm ON cm.message_id = m.id
-            WHERE cm.context_id = ?
-            ORDER BY m.timestamp ASC
-            LIMIT ?
+            SELECT *
+            FROM (
+                SELECT m.*
+                FROM messages m
+                JOIN context_messages cm ON cm.message_id = m.id
+                WHERE cm.context_id = ?
+                ORDER BY m.timestamp DESC
+                LIMIT ?
+            ) recent
+            ORDER BY timestamp ASC
             """,
             (context_id, limit),
         )

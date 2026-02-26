@@ -177,12 +177,25 @@ async def call_gemini_cli(
         )
         return
 
+    stderr_parts: List[str] = []
+
+    async def _drain_stderr():
+        while True:
+            chunk = await proc.stderr.read(65536)
+            if not chunk:
+                break
+            stderr_parts.append(chunk.decode("utf-8", errors="replace"))
+
+    stderr_task = asyncio.create_task(_drain_stderr())
+
     try:
         print(f"[{time.ctime()}] [Ctx: {context_id}] Sending prompt to stdin...", flush=True)
         proc.stdin.write(prompt_text.encode("utf-8"))
         await proc.stdin.drain()
         proc.stdin.close()
         await proc.stdin.wait_closed()
+
+        deadline = time.monotonic() + timeout_s if timeout_s else None
         
         # Read JSONL from stdout manually to avoid readline() limits
         buffer = bytearray()
@@ -232,7 +245,13 @@ async def call_gemini_cli(
             return None
 
         while True:
-            chunk = await proc.stdout.read(65536)
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError()
+                chunk = await asyncio.wait_for(proc.stdout.read(65536), timeout=remaining)
+            else:
+                chunk = await proc.stdout.read(65536)
             if not chunk:
                 if buffer:
                     line = buffer.decode("utf-8", errors="replace")
@@ -250,27 +269,36 @@ async def call_gemini_cli(
                 if ev:
                     yield ev
 
-        await proc.wait()
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise asyncio.TimeoutError()
+            await asyncio.wait_for(proc.wait(), timeout=remaining)
+        else:
+            await proc.wait()
         print(f"[{time.ctime()}] [Ctx: {context_id}] Gemini CLI finished with return code {proc.returncode}", flush=True)
         
     except asyncio.TimeoutError:
         print(f"[{time.ctime()}] [Ctx: {context_id}] ERROR: Gemini CLI timed out", flush=True)
         try:
             proc.kill()
+            await proc.wait()
         except Exception:
             pass
         yield GeminiEvent(type="error", content="The `gemini` CLI took too long to respond.")
     except Exception as e:
         print(f"[{time.ctime()}] [Ctx: {context_id}] ERROR in call_gemini_cli: {e}", flush=True)
         yield GeminiEvent(type="error", content=f"An internal error occurred: {e}")
+    finally:
+        try:
+            await stderr_task
+        except Exception:
+            pass
 
-    # Capture any remaining stderr
-    stderr_b = await proc.stderr.read()
-    if stderr_b:
-        stderr = stderr_b.decode("utf-8", errors="replace").strip()
-        if proc.returncode != 0:
-            print(f"[{time.ctime()}] [Ctx: {context_id}] STDERR from failed CLI: {stderr}", flush=True)
-            yield GeminiEvent(type="error", content=f"CLI failed with error: {stderr}")
+    stderr = "".join(stderr_parts).strip()
+    if stderr and proc.returncode != 0:
+        print(f"[{time.ctime()}] [Ctx: {context_id}] STDERR from failed CLI: {stderr}", flush=True)
+        yield GeminiEvent(type="error", content=f"CLI failed with error: {stderr}")
 
 
 async def run_next_turn(

@@ -5,6 +5,7 @@ import discord
 from src.app.runner import run_next_turn
 from src.db.queries import (
     get_undelivered_bot_messages, mark_delivered, insert_message,
+    mark_failed_delivery,
     add_message_to_context,
     get_idle_contexts_with_pending_user_messages, update_context_status,
     get_latest_user_message_for_context, get_context, set_context_reply_thread,
@@ -60,11 +61,12 @@ async def outbox_watcher(client, user_ids):
                 try:
                     for chunk in chunks:
                         await target.send(chunk)
-                except Exception as send_err:
-                    print(f"[{time.ctime()}] [Ctx: outbox] Send error for msg {msg_id}: {send_err}")
-                finally:
                     if msg_id:
                         mark_delivered(msg_id, delivered=True, delivered_at=time.time())
+                except Exception as send_err:
+                    print(f"[{time.ctime()}] [Ctx: outbox] Send error for msg {msg_id}: {send_err}")
+                    if msg_id:
+                        mark_failed_delivery(msg_id, str(send_err))
         except Exception as e:
             print(f"[{time.ctime()}] [Ctx: outbox] Error in outbox_watcher: {e}")
             await asyncio.sleep(2.0)
