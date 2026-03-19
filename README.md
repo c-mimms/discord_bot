@@ -38,6 +38,14 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] $! - watchdog.sh - Starting Discord Bot Wat
 ## Management
 The bot can be monitored via the Dashboard project natively hosted at `http://localhost:8000`.
 
+## Message Processing Logic
+To prevent the bot from reading and responding to all conversational chatter in shared channels (which can consume excessive API quota), it employs the following strict filtering rules:
+- **Direct Messages (DMs)**: Processed normally.
+- **Shared Channels (Guilds)**: Only processed if the bot is **explicitly `@mentioned`**.
+- **Active Threads**: If a thread is already linked to an active Gemini context, all messages in that thread are processed, regardless of mentions.
+
+Messages that fall outside these criteria are saved to the database for context but will *not* trigger the Gemini agent.
+
 ## Standardized Project Lifecycle
 To support the `/project up <name>` and `/project down <name>` commands, every project in the ecosystem must follow this structure:
 

@@ -6,19 +6,18 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ENV_FILE="$ROOT_DIR/.env"
 BOT_PID_FILE="$SCRIPT_DIR/../bot.pid"
 BOT_RUN_SCRIPT="$SCRIPT_DIR/run.sh"
+
+source "$SCRIPT_DIR/load_env.sh"
 
 echo "[$(date)] Starting watchdog for Discord bot..."
 
 while true; do
   # Load environment variables dynamically on each check/restart
-  if [ -f "$SCRIPT_DIR/.env" ]; then
-    # Source and export all environment variables from .env
-    set -a
-    source "$SCRIPT_DIR/.env"
-    set +a
-  fi
+  load_dotenv_file "$ENV_FILE"
 
   RESTART=false
   

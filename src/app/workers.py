@@ -15,32 +15,50 @@ from src.db.database import get_db
 async def outbox_watcher(client, user_ids):
     print("Outbox watcher started.")
     await client.wait_until_ready()
+    
+    # Simple cache for User/Channel objects to reduce fetch_* calls
+    cache = {}
+
+    async def get_target(cid=None, tid=None, uid=None):
+        cache_key = f"t:{tid}" if tid else (f"c:{cid}" if cid else f"u:{uid}")
+        if cache_key in cache:
+            return cache[cache_key]
+        
+        target = None
+        try:
+            if tid:
+                target = client.get_channel(int(tid)) or await client.fetch_channel(int(tid))
+            elif cid:
+                target = client.get_channel(int(cid)) or await client.fetch_channel(int(cid))
+            elif uid:
+                target = client.get_user(int(uid)) or await client.fetch_user(int(uid))
+            
+            if target:
+                cache[cache_key] = target
+        except Exception:
+            pass
+        return target
+
     while not client.is_closed():
         try:
             undelivered = get_undelivered_bot_messages()
             if not undelivered:
-                await asyncio.sleep(0.75)
+                await asyncio.sleep(1.0)
                 continue
 
-            primary_user = await client.fetch_user(int(user_ids[0]))
             for msg in undelivered:
-                target = None
-                channel_id = msg.get("channel_id")
-                thread_id = msg.get("thread_id")
-
-                try:
-                    if thread_id:
-                        target = client.get_channel(thread_id) or await client.fetch_channel(thread_id)
-                    elif channel_id:
-                        target = client.get_channel(channel_id) or await client.fetch_channel(channel_id)
-
-                    if not target:
-                        target = primary_user
-                except Exception:
-                    target = primary_user
+                msg_id = msg.get("id", "")
+                target = await get_target(
+                    cid=msg.get("channel_id"), 
+                    tid=msg.get("thread_id"), 
+                    uid=user_ids[0]
+                )
+                
+                if not target:
+                    print(f"[{time.ctime()}] [Ctx: outbox] Could not resolve target for msg {msg_id}")
+                    continue
 
                 content = (msg.get("content") or "").strip()
-                msg_id = msg.get("id", "")
                 if not content:
                     mark_delivered(msg_id, delivered=True, delivered_at=time.time())
                     continue
@@ -50,26 +68,105 @@ async def outbox_watcher(client, user_ids):
                 remaining = content
                 while len(remaining) > 1900:
                     split_at = remaining.rfind("\n", 0, 1900)
-                    if split_at < 0:
-                        split_at = 1900
+                    if split_at < 0: split_at = 1900
                     chunks.append(remaining[:split_at].rstrip())
                     remaining = remaining[split_at:].lstrip("\n")
-                if remaining:
-                    chunks.append(remaining)
+                if remaining: chunks.append(remaining)
 
-                print(f"[{time.ctime()}] [Ctx: outbox] Sending message to {target} ({len(chunks)} chunk(s)): {content[:50]}...", flush=True)
+                print(f"[{time.ctime()}] [Ctx: outbox] Sending message to {target} ({len(chunks)} chunk(s))", flush=True)
                 try:
                     for chunk in chunks:
                         await target.send(chunk)
-                    if msg_id:
-                        mark_delivered(msg_id, delivered=True, delivered_at=time.time())
+                    mark_delivered(msg_id, delivered=True, delivered_at=time.time())
                 except Exception as send_err:
                     print(f"[{time.ctime()}] [Ctx: outbox] Send error for msg {msg_id}: {send_err}")
-                    if msg_id:
-                        mark_failed_delivery(msg_id, str(send_err))
+                    mark_failed_delivery(msg_id, str(send_err))
+            
+            await asyncio.sleep(0.5)
         except Exception as e:
             print(f"[{time.ctime()}] [Ctx: outbox] Error in outbox_watcher: {e}")
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(5.0)
+
+async def check_for_missed_messages(client, user_ids):
+    """Fetch recent history for active contexts and inject missing user messages."""
+    print(f"[{time.ctime()}] Starting missed message catch-up...")
+    from src.db.queries import get_active_contexts, insert_message, add_message_to_context, get_messages_for_context
+    from src.app.message_handlers import _discord_message_to_payload
+
+    active_ctxs = get_active_contexts(limit=10)
+    for ctx in active_ctxs:
+        context_id = ctx['id']
+        channel_id = ctx.get('reply_thread_id') or ctx.get('reply_channel_id')
+        if not channel_id:
+            continue
+
+        try:
+            channel = client.get_channel(int(channel_id)) or await client.fetch_channel(int(channel_id))
+            if not channel: continue
+
+            # Get DB's view of recent messages
+            db_messages = {m['id'] for m in get_messages_for_context(context_id, limit=20)}
+            
+            # Fetch Discord's view
+            async for message in channel.history(limit=20):
+                if str(message.id) in db_messages:
+                    continue
+                
+                if not message.author.bot and str(message.author.id) in user_ids:
+                    print(f"[{time.ctime()}] [Ctx: {context_id}] Catching up missed message: {message.id}")
+                    
+                    should_process = False
+                    is_thread = isinstance(message.channel, discord.Thread)
+                    if isinstance(message.channel, discord.DMChannel):
+                        should_process = True
+                    elif client.user in message.mentions:
+                        should_process = True
+                    elif is_thread:
+                        from src.db.queries import find_context_by_reply_thread
+                        if find_context_by_reply_thread(message.channel.id):
+                            should_process = True
+
+                    raw_payload = _discord_message_to_payload(message)
+                    msg_entry = insert_message(
+                        author=str(message.author),
+                        content=message.content,
+                        source="user",
+                        timestamp=message.created_at.timestamp(),
+                        channel_id=message.channel.id if not isinstance(message.channel, discord.Thread) else message.channel.parent_id,
+                        thread_id=message.channel.id if isinstance(message.channel, discord.Thread) else None,
+                        raw_discord_payload=raw_payload,
+                    )
+                    add_message_to_context(context_id, msg_entry["id"])
+                    
+                    if should_process:
+                        if client.gemini_queue:
+                            client.gemini_queue.put_nowait({"context_id": context_id})
+                    else:
+                        silent_msg = insert_message(
+                            author="system",
+                            content="",
+                            source="bot",
+                            timestamp=time.time(),
+                            channel_id=msg_entry["channel_id"],
+                            thread_id=msg_entry["thread_id"],
+                            delivered=True,
+                            delivered_at=time.time(),
+                        )
+                        add_message_to_context(context_id, silent_msg["id"])
+
+        except Exception as e:
+            print(f"[{time.ctime()}] [Ctx: {context_id}] Error in catch-up: {e}")
+
+async def loop_monitor():
+    """Monitor event loop lag."""
+    print("Event loop monitor started.")
+    while True:
+        start = time.perf_counter()
+        await asyncio.sleep(1)
+        end = time.perf_counter()
+        lag = (end - start) - 1
+        if lag > 0.5:
+            print(f"[{time.ctime()}] ⚠️ Loop LAG warning: {lag:.3f}s")
 
 async def process_context(context_id: str, client, user_ids, gemini_cmd, project_root):
     try:
@@ -163,6 +260,7 @@ async def process_context(context_id: str, client, user_ids, gemini_cmd, project
                 await active_msg.edit(content=display_text[:1800])
             last_edit_time = now
 
+        has_output = False
         async for event in run_next_turn(
             latest_user_message,
             context_id=context_id,
@@ -170,17 +268,37 @@ async def process_context(context_id: str, client, user_ids, gemini_cmd, project
             project_root=project_root,
         ):
             if event.type == "text":
+                has_output = True
                 reply_accumulator += event.content
                 full_reply_accumulator += event.content
                 await sync_discord()
             elif event.type == "tool_use":
+                has_output = True
                 last_status = f"Running tool: {event.content}..."
                 await sync_discord()
             elif event.type == "tool_result":
+                has_output = True
                 last_status = ""
             elif event.type == "error":
                 last_status = f"Error: {event.content}"
                 await sync_discord()
+                
+                # If we encounter a Quota/Rate limit error, we must mark the turn as "handled"
+                # so the polling loop doesn't keep retrying it forever.
+                if any(x in event.content for x in ["Quota", "capacity", "429"]):
+                    error_msg_content = f"⚠️ I'm currently over my rate limit or capacity ({event.content}). Please try again later."
+                    bot_msg = insert_message(
+                        author="gemini",
+                        content=error_msg_content,
+                        source="bot",
+                        timestamp=time.time(),
+                        channel_id=reply_channel_id,
+                        thread_id=reply_thread_id,
+                        delivered=True,
+                        delivered_at=time.time(),
+                    )
+                    add_message_to_context(context_id, bot_msg["id"])
+                    has_output = True # Prevent the fall-through error handling if this was the only event
 
         last_status = ""
         await sync_discord(force=True)
@@ -191,6 +309,20 @@ async def process_context(context_id: str, client, user_ids, gemini_cmd, project
             bot_msg = insert_message(
                 author="gemini",
                 content=clean_content,
+                source="bot",
+                timestamp=time.time(),
+                channel_id=reply_channel_id,
+                thread_id=reply_thread_id,
+                delivered=True,
+                delivered_at=time.time(),
+            )
+            add_message_to_context(context_id, bot_msg["id"])
+        elif not has_output:
+            # If Gemini returned NO events (e.g. CLI crashed immediately), we still need to break the loop
+            print(f"[{time.ctime()}] [Ctx: {context_id}] WARNING: Gemini turn produced no output events. Marking as failed to break retry loop.")
+            bot_msg = insert_message(
+                author="gemini",
+                content="⚠️ I encountered an internal error and couldn't generate a response.",
                 source="bot",
                 timestamp=time.time(),
                 channel_id=reply_channel_id,
@@ -213,7 +345,7 @@ async def polling_fallback(queue):
                 await queue.put({"context_id": cid})
         except Exception as e:
             print(f"Error in polling fallback: {e}")
-        await asyncio.sleep(10)
+        await asyncio.sleep(15) # Longer interval
 
 async def gemini_worker(client, queue, user_ids, timestamp_file, gemini_cmd, project_root):
     print("Gemini parallel worker started.")
@@ -228,8 +360,12 @@ async def gemini_worker(client, queue, user_ids, timestamp_file, gemini_cmd, pro
     except Exception as e:
         print(f"[{time.ctime()}] WARNING: Could not reset stale contexts: {e}", flush=True)
 
+    asyncio.create_task(loop_monitor())
     asyncio.create_task(polling_fallback(queue))
     running_tasks = set()
+
+    # Initial catch-up for missed messages
+    # asyncio.create_task(check_for_missed_messages(client, user_ids))
 
     while not client.is_closed():
         evt = await queue.get()

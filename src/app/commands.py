@@ -207,6 +207,8 @@ def setup_commands(client):
             details = f"**Type:** {project_type}\n"
             if data.get('url'): 
                 details += f"**URL:** {data.get('url')}\n"
+            if data.get('github_url'):
+                details += f"**GitHub:** {data.get('github_url')}\n"
             details += f"**Path:** `{project_path}`"
             embed.add_field(name=f"{status_emoji} {data.get('name', key)}", value=details, inline=False)
         

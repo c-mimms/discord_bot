@@ -5,12 +5,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Source the .env file from the project root
-if [ -f "$ROOT_DIR/.env" ]; then
-  set -a
-  source "$ROOT_DIR/.env"
-  set +a
-fi
+source "$SCRIPT_DIR/load_env.sh"
+load_dotenv_file "$ROOT_DIR/.env"
 
 echo "Starting Discord Bot in Development Mode..."
 cd "$ROOT_DIR"

@@ -141,5 +141,30 @@ async def handle_message(client, message, user_ids):
         add_message_to_context(context_id, msg_entry["id"])
 
         # 7. Enqueue for processing
-        if client.gemini_queue:
-            client.gemini_queue.put_nowait({"context_id": context_id})
+        # Filter: Only process if DM, bot mentioned, or already in a thread
+        should_process = False
+        if isinstance(message.channel, discord.DMChannel):
+            should_process = True
+        elif client.user in message.mentions:
+            should_process = True
+        elif is_thread:
+            # If it's a thread, we only process if it's already linked to a Gemini context
+            if find_context_by_reply_thread(thread_id):
+                should_process = True
+
+        if should_process:
+            if client.gemini_queue:
+                client.gemini_queue.put_nowait({"context_id": context_id})
+        else:
+            # Insert a silent bot message to prevent the polling loop from picking this up as pending
+            silent_msg = insert_message(
+                author="system",
+                content="",
+                source="bot",
+                timestamp=time.time(),
+                channel_id=channel_id,
+                thread_id=thread_id,
+                delivered=True,
+                delivered_at=time.time(),
+            )
+            add_message_to_context(context_id, silent_msg["id"])

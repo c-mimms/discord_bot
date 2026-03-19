@@ -176,6 +176,15 @@ def update_context_status(
         )
 
 
+def update_context_session_id(context_id: str, session_id: Optional[str]) -> None:
+    """Update the Gemini session ID for a context."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE contexts SET gemini_session_id = ?, updated_at = ? WHERE id = ?",
+            (session_id, time.time(), context_id),
+        )
+
+
 def get_idle_contexts_with_pending_user_messages() -> List[str]:
     """
     Return context IDs that are idle but whose last linked message is from 'user'.
@@ -268,3 +277,13 @@ def get_latest_user_message_for_context(
         )
         row = cursor.fetchone()
         return dict(row) if row else None
+
+
+def get_active_contexts(limit: int = 10) -> List[Dict[str, Any]]:
+    """Return the most recently updated contexts."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "SELECT * FROM contexts ORDER BY updated_at DESC LIMIT ?",
+            (limit,)
+        )
+        return [dict(row) for row in cursor.fetchall()]

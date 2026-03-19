@@ -6,12 +6,14 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, AsyncGenerator
 from dotenv import load_dotenv
 
-from src.db.queries import get_messages_for_context
+from src.db.queries import get_messages_for_context, get_context, update_context_session_id
 
 load_dotenv()
 
 # All runtime logs live in discord_bot/ (3 levels up from src/app/runner.py)
 _DISCORD_BOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+GEMINI_RESPONSES_LOG = os.path.join(_DISCORD_BOT_DIR, "gemini_responses.log")
+GEMINI_TRACES_DIR = os.path.join(_DISCORD_BOT_DIR, "logs", "gemini_traces")
 GEMINI_RESPONSES_LOG = os.path.join(_DISCORD_BOT_DIR, "gemini_responses.log")
 
 @dataclass(frozen=True)
@@ -19,21 +21,6 @@ class GeminiEvent:
     type: str  # "text", "tool_use", "tool_result", "error", "status"
     content: str
     metadata: Optional[Dict[str, Any]] = None
-
-SYSTEM_PROMPT = """
-You are an AI project agent running via the Gemini CLI. Your behavior, communication style, and technical requirements are governed by the PROJECT MANDATES in `GEMINI.md`.
-
-**CRITICAL RULES:**
-1. Follow all mandates in `GEMINI.md` strictly.
-2. **URLs:** NEVER use `[url](url)` syntax. It breaks in Discord. Use raw links like `http://example.com` or descriptive links like `[Label](http://example.com)`.
-3. **Formatting:** White space is mandatory. Always add a space after periods. Separate your thoughts, tool plans, and user-facing text with double carriage returns (blank lines).
-4. **MANDATORY mid-task polling — use run_command:** Every 3-4 tool calls AND before your final answer, you MUST execute this shell command using the run_command tool:
-   `python3 discord_bot/bin/get_new_messages.py`
-   - This is a REAL shell command you must actually RUN using run_command. Do NOT describe it in text.
-   - Writing "Checking for new messages..." without calling run_command is a violation of this rule.
-   - If the output contains new messages, incorporate them immediately and adjust your plan.
-   - If the user says stop/abort, stop all work immediately and confirm.
-"""
 
 def render_transcript(messages: List[Dict[str, Any]]) -> str:
     """
@@ -54,82 +41,79 @@ def render_transcript(messages: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def build_prompt_text(latest_user_message: Dict[str, Any], context_id: str) -> str:
+def build_prompt_text(latest_user_message: Dict[str, Any], context_id: str, ignore_history: bool = False) -> str:
     latest_content = (latest_user_message.get("content") or "").strip()
     turn_start_ts = float(latest_user_message.get("timestamp", time.time()))
 
     # Fetch previous message for context if in a thread or channel
     context_prefix = ""
-    try:
-        relevant_messages = get_messages_for_context(context_id)
+    if not ignore_history:
+        try:
+            relevant_messages = get_messages_for_context(context_id)
         
-        # Find the message right before the current one
-        prev_msg = None
-        current_id = latest_user_message.get("id")
-        
-        idx = -1
-        for i, m in enumerate(relevant_messages):
-            if current_id and m.get("id") == current_id:
-                idx = i
-                break
-            elif float(m.get("timestamp", 0)) == turn_start_ts:
-                idx = i
-                break
+            # Find the message right before the current one
+            prev_msg = None
+            current_id = latest_user_message.get("id")
+            
+            idx = -1
+            for i, m in enumerate(relevant_messages):
+                if current_id and m.get("id") == current_id:
+                    idx = i
+                    break
+                elif float(m.get("timestamp", 0)) == turn_start_ts:
+                    idx = i
+                    break
 
-        if idx > 0:
-            prev_msg = relevant_messages[idx - 1]
-        elif idx == -1 and relevant_messages:
-            if float(relevant_messages[-1].get("timestamp", 0)) < turn_start_ts:
-                prev_msg = relevant_messages[-1]
+            if idx > 0:
+                prev_msg = relevant_messages[idx - 1]
+            elif idx == -1 and relevant_messages:
+                if float(relevant_messages[-1].get("timestamp", 0)) < turn_start_ts:
+                    prev_msg = relevant_messages[-1]
 
-        if prev_msg:
-            prev_role = "User" if prev_msg.get("source") == "user" else "Bot"
-            prev_text = (prev_msg.get("content") or "").strip()
-            if prev_text:
-                context_prefix = f"--- PREVIOUS MESSAGE CONTENT FOR CONTEXT ---\n{prev_role}: {prev_text}\n------------------------------------------\n\n"
-    except Exception as e:
-        print(f"[{time.ctime()}] [Ctx: {context_id}] WARNING: Could not load previous message context: {e}", flush=True)
+            if prev_msg:
+                prev_role = "User" if prev_msg.get("source") == "user" else "Bot"
+                prev_text = (prev_msg.get("content") or "").strip()
+                if prev_text:
+                    context_prefix = f"--- PREVIOUS MESSAGE CONTENT FOR CONTEXT ---\n{prev_role}: {prev_text}\n------------------------------------------\n\n"
+        except Exception as e:
+            print(f"[{time.ctime()}] [Ctx: {context_id}] WARNING: Could not load previous message context: {e}", flush=True)
 
-    # Read project mandates (GEMINI.md) if available
-    mandates = ""
-    try:
-        # GEMINI.md is usually in the project root
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        mandate_path = os.path.join(project_root, "GEMINI.md")
-        if os.path.exists(mandate_path):
-            with open(mandate_path, "r") as f:
-                mandates = f.read().strip()
-    except Exception as e:
-        print(f"[{time.ctime()}] [Ctx: {context_id}] WARNING: Could not read GEMINI.md: {e}", flush=True)
+    # Read modular prompt components
+    system_rules = []
+    components_dir = os.path.join(_DISCORD_BOT_DIR, "prompts", "components")
+    if os.path.exists(components_dir):
+        for filename in sorted(os.listdir(components_dir)):
+            if filename.endswith(".md"):
+                file_path = os.path.join(components_dir, filename)
+                try:
+                    with open(file_path, "r") as f:
+                        system_rules.append(f.read().strip())
+                except Exception as e:
+                    print(f"[{time.ctime()}] [Ctx: {context_id}] WARNING: Could not read {filename}: {e}", flush=True)
 
-    prompt_parts = [
-        SYSTEM_PROMPT.strip(),
-        "",
+    prompt_parts = []
+    if system_rules:
+        prompt_parts.extend(system_rules)
+
+    prompt_parts.extend([
         "---",
-        "PROJECT MANDATES (Follow these strictly):",
-        mandates if mandates else "(No mandates found in GEMINI.md)",
-        "---",
-        "",
         f"IMPORTANT: The current turn started at timestamp {turn_start_ts}.",
-        f"- To check for new user messages mid-task, run: `python3 discord_bot/bin/get_new_messages.py`",
-        f"- Do this every 3-4 tool calls and before your final answer.",
-        "",
-        "---",
         "Latest user message:",
-        "",
-        context_prefix + latest_content,
-        "",
-        "---",
-        "Instructions:",
-        "",
-        "Continue the conversation. You must organize your response strictly like this:",
-        "1. Start with a brief, single-sentence acknowledgment or plan (with proper punctuation and spacing).",
-        "2. If you need to use tools to investigate, do so.",
-        "3. Once you have a result, provide the user-facing answer cleanly formatted in Markdown.",
-        "CRITICAL: Always ensure there is a space after periods, and use double line breaks between paragraphs."
-    ]
+        context_prefix + latest_content
+    ])
 
-    return "\n".join(prompt_parts)
+    prompt_text = "\n".join(prompt_parts)
+
+    dump_dir = os.environ.get("DEBUG_PROMPT_DUMP_DIR")
+    if dump_dir and os.path.isdir(dump_dir):
+        dump_path = os.path.join(dump_dir, "prompt_dump.txt")
+        try:
+            with open(dump_path, "w") as f:
+                f.write(prompt_text)
+        except Exception as e:
+            print(f"[{time.ctime()}] [Ctx: {context_id}] WARNING: Could not dump prompt to {dump_path}: {e}", flush=True)
+
+    return prompt_text
 
 
 async def call_gemini_cli(
@@ -140,15 +124,37 @@ async def call_gemini_cli(
     timeout_s: float = 600,
     cwd: Optional[str] = None,
     env: Optional[dict] = None,
+    session_id: Optional[str] = None,
 ) -> AsyncGenerator[GeminiEvent, None]:
     print(f"[{time.ctime()}] [Ctx: {context_id}] Invoking Gemini CLI (Streaming): {gemini_cmd}", flush=True)
     print(f"[{time.ctime()}] [Ctx: {context_id}] Prompt length: {len(prompt_text)} chars", flush=True)
     
     args = [
         gemini_cmd,
+    ]
+    if session_id:
+        args.extend(["-r", session_id])
+        
+    args.extend([
         "--output-format", "stream-json",
         "--approval-mode", "yolo",
-    ]
+    ])
+    
+    # Always record responses to the trace directory (one file per turn)
+    os.makedirs(GEMINI_TRACES_DIR, exist_ok=True)
+    turn_ts_int = int(time.time() * 1000)
+    trace_filename = f"{context_id}_{turn_ts_int}.json"
+    responses_path = os.path.join(GEMINI_TRACES_DIR, trace_filename)
+    
+    dump_dir = os.environ.get("DEBUG_PROMPT_DUMP_DIR")
+    if dump_dir and os.path.isdir(dump_dir):
+        # Override to dump dir if in testing mode
+        responses_path = os.path.join(dump_dir, "recorded_responses.json")
+        
+    args.extend(["--record-responses", responses_path])
+
+    if os.environ.get("GEMINI_RUNNER_DEBUG") == "1":
+        args.append("--debug")
     
     if env is None:
         env = os.environ.copy()
@@ -231,6 +237,8 @@ async def call_gemini_cli(
                         
                     if chunk_text:
                         return GeminiEvent(type="text", content=chunk_text)
+                elif ev_type == "init":
+                    return GeminiEvent(type="init", content=event.get("session_id", ""))
                 elif ev_type == "tool_use":
                     tool_name = event.get("content", "")
                     return GeminiEvent(type="tool_use", content=tool_name, metadata=event.get("metadata"))
@@ -296,9 +304,12 @@ async def call_gemini_cli(
             pass
 
     stderr = "".join(stderr_parts).strip()
-    if stderr and proc.returncode != 0:
-        print(f"[{time.ctime()}] [Ctx: {context_id}] STDERR from failed CLI: {stderr}", flush=True)
-        yield GeminiEvent(type="error", content=f"CLI failed with error: {stderr}")
+    if stderr:
+        if proc.returncode != 0:
+            print(f"[{time.ctime()}] [Ctx: {context_id}] STDERR from failed CLI: {stderr}", flush=True)
+            yield GeminiEvent(type="error", content=f"CLI failed with error: {stderr}")
+        elif os.environ.get("GEMINI_RUNNER_DEBUG") == "1":
+            print(f"[{time.ctime()}] [Ctx: {context_id}] DEBUG STDERR: {stderr}", flush=True)
 
 
 async def run_next_turn(
@@ -308,8 +319,11 @@ async def run_next_turn(
     gemini_cmd: str = "gemini",
     project_root: Optional[str] = None,
 ):
-    print(f"[{time.ctime()}] [Ctx: {context_id}] Processing user message: {latest_message.get('content', '')[:50]}...", flush=True)
-    prompt_text = build_prompt_text(latest_message, context_id)
+    ctx = get_context(context_id)
+    session_id = ctx.get("gemini_session_id") if ctx else None
+
+    print(f"[{time.ctime()}] [Ctx: {context_id}] Processing user message... (Session: {session_id or 'None'})", flush=True)
+    prompt_text = build_prompt_text(latest_message, context_id, ignore_history=bool(session_id))
 
     env = os.environ.copy()
     env.setdefault("DISCORD_OUTBOX_ONLY", "1")
@@ -319,5 +333,33 @@ async def run_next_turn(
     # Yield the timestamp of the message we are processing so bot.py can track it
     yield GeminiEvent(type="status", content="starting", metadata={"timestamp": float(latest_message.get("timestamp", 0))})
 
-    async for event in call_gemini_cli(prompt_text, context_id=context_id, gemini_cmd=gemini_cmd, cwd=project_root, env=env):
-        yield event
+    buffered_events = []
+    session_invalid = False
+
+    async for event in call_gemini_cli(prompt_text, context_id=context_id, gemini_cmd=gemini_cmd, cwd=project_root, env=env, session_id=session_id):
+        if event.type == "init":
+            update_context_session_id(context_id, event.content)
+            buffered_events.append(event)
+        elif event.type == "error" and session_id and "Invalid session identifier" in event.content:
+            session_invalid = True
+            break
+        elif event.type == "status" and event.content == "spawned":
+            buffered_events.append(event)
+        else:
+            if buffered_events:
+                for e in buffered_events: yield e
+                buffered_events = []
+            yield event
+
+    if session_invalid:
+        print(f"[{time.ctime()}] [Ctx: {context_id}] Session {session_id} invalid. Clearing and falling back to cold start.", flush=True)
+        update_context_session_id(context_id, None)
+        prompt_text = build_prompt_text(latest_message, context_id, ignore_history=False)
+        
+        async for event in call_gemini_cli(prompt_text, context_id=context_id, gemini_cmd=gemini_cmd, cwd=project_root, env=env, session_id=None):
+            if event.type == "init":
+                update_context_session_id(context_id, event.content)
+            yield event
+    else:
+        for e in buffered_events:
+            yield e

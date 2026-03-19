@@ -38,6 +38,7 @@ def init_db():
                 reply_thread_id  INTEGER,           -- Discord thread owned by this context
                 status           TEXT DEFAULT 'idle',
                 current_pid      INTEGER,
+                gemini_session_id TEXT,             -- session ID from Gemini CLI
                 created_at       REAL,
                 updated_at       REAL
             )
@@ -76,6 +77,10 @@ def init_db():
             WHERE delivery_status IS NULL OR trim(delivery_status) = ''
             """
         )
+
+        ctx_cols = {row["name"] for row in conn.execute("PRAGMA table_info(contexts)").fetchall()}
+        if "gemini_session_id" not in ctx_cols:
+            conn.execute("ALTER TABLE contexts ADD COLUMN gemini_session_id TEXT")
 
         # ── context_messages ─────────────────────────────────────────────────
         # Many-to-many: any message can belong to any context.
