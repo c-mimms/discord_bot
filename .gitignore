@@ -11,3 +11,4 @@ last_message_timestamp.txt
 *.db
 *.db-shm
 *.db-wal
+logs/
